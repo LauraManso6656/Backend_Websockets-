@@ -1,12 +1,15 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import Logging from '../library/Logging';
 import MensajeModel, { IMensajeModel } from '../models/Mensaje';
+import { ConnectionManager } from './ConnectionManager';
 
 export class MensajeService {
     private io: SocketIOServer;
+    private connectionManager: ConnectionManager;
 
     constructor(io: SocketIOServer) {
         this.io = io;
+        this.connectionManager = new ConnectionManager();
     }
 
     /**
@@ -23,16 +26,43 @@ export class MensajeService {
                 Logging.info(`Socket ${socket.id} se unió a organización ${organizacionId}`);
             });
             */
+           
+           socket.on('user-connect', (data: { usuarioId: string, nombre: string, email: string, organizacion: string }) => { //esta funcion es para que el cliente avise que se ha conectado, y así registrarlo en el ConnectionManager. Recibe un objeto con los datos del usuario (ID, nombre, email, organización).
+                this.connectionManager.agregarUsuario(
+                    socket.id,
+                    data.usuarioId,
+                    data.nombre,
+                    data.email,
+                    data.organizacion 
 
+                   
+                );  
+                // Difusión: Avisamos a todos del nuevo usuario
+                
+                 //usuario se conecta + registra  
+                // Obtener lista actualizada y emitir a TODOS!!
+                const usuariosConectados = this.connectionManager.obtenerTodos();
+                this.io.emit('users-list-updated', {
+                    usuarios: usuariosConectados,
+                    total: this.connectionManager.obtenerTotal(),
+                    timestamp: new Date() //un poco de ayuda de ia
+                });
+                 Logging.info(`Usuarios conectados: ${usuariosConectados.length}`);
+            });
+
+             
+               
             socket.on('typing', (data: { usuario: string }) => {
                 Logging.info(`${data.usuario} está escribiendo...`);
                 socket.broadcast.emit('user-typing', data);
             });
+            
 
             socket.on('stop-typing', (data: { usuario: string }) => {
                 Logging.info(`${data.usuario} dejó de escribir`);
                 socket.broadcast.emit('user-stop-typing', data);
             });
+            
 
             // Escuchar mensajes incoming
             socket.on('message', async (data: { usuario: string, organizacion: string, contenido: string }) => {
@@ -64,11 +94,35 @@ export class MensajeService {
                 }
             });
 
-            // Desconexión
-            socket.on('disconnect', () => {
-                Logging.info(`Socket desconectado: ${socket.id}`);
+            //  Solicitar lista de usuarios!!
+            socket.on('request-users-list', () => {
+                const usuariosConectados = this.connectionManager.obtenerTodos();
+                socket.emit('users-list-updated', {
+                    usuarios: usuariosConectados,
+                    total: this.connectionManager.obtenerTotal(),
+                    timestamp: new Date()
+                });
             });
+
+            // Desconexión
+           socket.on('disconnect', () => {
+            Logging.info(`Socket desconectado: ${socket.id}`);
+            
+            // Movemos esto AQUÍ DENTRO para que el broadcast ocurra al irse el usuario
+            const usuarioEliminado = this.connectionManager.eliminarUsuario(socket.id);
+            
+            if (usuarioEliminado) {
+                const usuariosConectados = this.connectionManager.obtenerTodos();
+                this.io.emit('users-list-updated', {
+                    usuarios: usuariosConectados,
+                    total: this.connectionManager.obtenerTotal(),
+                    timestamp: new Date()
+                });
+                Logging.info(`Usuarios restantes: ${usuariosConectados.length}`);
+            }
         });
+        });
+        
     }
 
     /**
